@@ -1,6 +1,6 @@
 import { USER_SETTING, SVG, state } from "../settings";
-import { updateLoadingBar, saveFiles, openNewTab, logger, toggleVolumeSilder, triggerReactClickHandler } from "../utils/general";
-import { getMediaList } from "../utils/api";
+import { updateLoadingBar, saveFiles, openNewTab, logger, toggleVolumeSilder, triggerReactClickHandler, tryHandleDashFromMediaItem } from "../utils/general";
+import { getMediaList, getMediaInfo } from "../utils/api";
 import { filterResourceData } from "./post";
 import { _i18n } from "../utils/i18n";
 /*! ESLINT IMPORT END !*/
@@ -32,6 +32,23 @@ export async function onReels(isDownload, isVideo, isPreview) {
                 else {
                     timestamp = media.taken_at;
                 }
+            }
+
+            // The Media API's DASH manifest, where getMediaList's video_versions are progressive files.
+            const mediaInfo = isVideo && USER_SETTING.PREFER_DASH_MANIFEST && USER_SETTING.FORCE_RESOURCE_VIA_MEDIA
+                ? await getMediaInfo(media.pk ?? media.id).catch(() => null)
+                : null;
+
+            if (mediaInfo?.status === 'ok' && await tryHandleDashFromMediaItem({
+                mediaItem: mediaInfo.items[0],
+                username: media.owner.username,
+                sourceType: "reels",
+                timestamp,
+                shortcode: reelsPath,
+                isPreview
+            })) {
+                updateLoadingBar(false);
+                return;
             }
 
             if (result.type === 'query_hash') {

@@ -1260,18 +1260,38 @@ export async function triggerLinkElement($element, isPreview = false) {
             return;
         }
 
+        let mediaInfo = null;
+        if (filetype === 'mp4' && USER_SETTING.FORCE_RESOURCE_VIA_MEDIA && mediaId) {
+            updateLoadingBar(true);
+            mediaInfo = await getMediaInfo(mediaId).catch(() => null);
+            updateLoadingBar(false);
+        }
+
+        // The page's own answers give Firefox H.264 up to 720p; the Media API's, asked with webViewAgent, don't depend on the browser.
+        if (mediaInfo?.status === 'ok' && await tryHandleDashFromMediaItem({
+            mediaItem: mediaInfo.items[0],
+            username,
+            sourceType,
+            timestamp,
+            shortcode,
+            isPreview: downloadOnly ? false : isPreview,
+            index
+        })) {
+            return;
+        }
+
         if (USER_SETTING.PREFER_DASH_MANIFEST && state.GL_mediaDataCache[mediaId]) {
             logger('Video Dash Stream, Processing video with DASH manifest', 'mediaId', mediaId);
 
-            const handled = await tryHandleDashFromMediaItem(
-                state.GL_mediaDataCache[mediaId],
+            const handled = await tryHandleDashFromMediaItem({
+                mediaItem: state.GL_mediaDataCache[mediaId],
                 username,
                 sourceType,
                 timestamp,
                 shortcode,
-                downloadOnly ? false : isPreview,
+                isPreview: downloadOnly ? false : isPreview,
                 index
-            );
+            });
 
             if (handled) return;
         }
@@ -1298,7 +1318,7 @@ export async function triggerLinkElement($element, isPreview = false) {
 
         if (USER_SETTING.FORCE_RESOURCE_VIA_MEDIA && mediaId) {
             updateLoadingBar(true);
-            let result = await getMediaInfo(mediaId);
+            let result = mediaInfo ?? await getMediaInfo(mediaId);
             updateLoadingBar(false);
 
             if (result?.status === 'ok') {
