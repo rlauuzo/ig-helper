@@ -56,6 +56,8 @@
 // @resource           INTERNAL_CSS https://cdn.jsdelivr.net/gh/SN-Koarashi/ig-helper@master/style.css
 // @resource           LOCALE_MANIFEST https://cdn.jsdelivr.net/gh/SN-Koarashi/ig-helper@master/locale/manifest.json
 // @supportURL         https://github.com/SN-Koarashi/ig-helper/
+// @updateURL          https://raw.githubusercontent.com/rlauuzo/ig-helper/release/main.js
+// @downloadURL        https://raw.githubusercontent.com/rlauuzo/ig-helper/release/main.js
 // @contributionURL    https://ko-fi.com/snkoarashi
 // @icon               https://www.google.com/s2/favicons?domain=www.instagram.com&sz=32
 // @compatible         chrome >= 100
