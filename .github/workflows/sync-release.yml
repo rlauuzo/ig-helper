@@ -1,0 +1,47 @@
+name: Sync release with upstream
+
+# Rebases the release branch (this fork's commits) onto upstream master, rebuilds main.js and
+# versions it upstream's version + ".1", so Tampermonkey prefers it to upstream's build.
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Rebase, rebuild and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch https://github.com/SN-Koarashi/ig-helper.git master
+          if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+            echo "Already on upstream master"
+            exit 0
+          fi
+
+          # main.js is rebuilt below, so its conflicts are moot: keep either side.
+          echo "main.js merge=keep" >> .git/info/attributes
+          git config merge.keep.driver true
+          git rebase FETCH_HEAD
+
+          npm ci
+          node build.js
+          # Upstream's version + ".1" sorts above upstream's build and below its next release.
+          version=$(sed -n 's|^// @version *||p' src/metadata.js)
+          sed -i "s|^\(// @version *\).*|\1$version.1|" main.js
+          git commit -a --amend --no-edit
+          git push --force-with-lease origin HEAD:release
