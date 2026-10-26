@@ -2709,13 +2709,43 @@
             let timestamp = Math.floor(date / 1000);
 
             updateLoadingBar(true);
+
+            // A story with music shows and lists its 640 px first frame, where getStoryPhoto lists up to the upload.
+            const storyId = getStoryIdFromPath();
+            if (storyId && $('body > div section:visible video[playsinline]').length === 0) {
+                const $storyImg = $('body > div section:visible img[referrerpolicy][class], body > div section:visible img[crossorigin][class]:not([alt])');
+                const shownWidth = Math.max($storyImg[0]?.naturalWidth ?? 0, ...($storyImg.attr('srcset') ?? '').split(',').map(entry => parseInt(entry.trim().split(' ')[1]) || 0));
+                const photo = await getStoryPhoto(username, storyId);
+
+                if (photo && photo.width > shownWidth) {
+                    if (USER_SETTING.RENAME_PUBLISH_DATE) {
+                        timestamp = new Date($('body > div section:visible time[datetime][class]').first().attr('datetime')).getTime();
+                    }
+
+                    if (isPreview) {
+                        openNewTab(photo.url);
+                    }
+                    else {
+                        saveFiles(photo.url, {
+                            username,
+                            sourceType: "stories",
+                            timestamp,
+                            filetype: 'jpg',
+                            shortcode: storyId
+                        });
+                    }
+                    updateLoadingBar(false);
+                    return;
+                }
+            }
+
             if (USER_SETTING.FORCE_RESOURCE_VIA_MEDIA && !state.tempFetchRateLimit) {
                 let mediaId = null;
 
                 let userInfo = await getUserId(username);
                 let userId = userInfo.user.pk;
                 let stories = await getStories(userId);
-                let urlID = location.pathname.split('/').filter(s => s.length > 0 && s.match(/^([0-9]{10,})$/)).at(-1);
+                let urlID = getStoryIdFromPath();
 
                 // OPTIMIZATION: cache items reference (used 4+ times)
                 const items = stories.data.xdt_api__v1__feed__reels_media.reels_media[0].items;
@@ -2761,7 +2791,7 @@
                 }
 
                 if (mediaId == null) {
-                    mediaId = location.pathname.split('/').filter(s => s.length > 0 && s.match(/^([0-9]{10,})$/)).at(-1);
+                    mediaId = getStoryIdFromPath();
                 }
 
                 if (USER_SETTING.CAPTURE_IMAGE_VIA_MEDIA_CACHE) {
@@ -3160,6 +3190,61 @@
     }
 
     /**
+     * getStoryIdFromPath
+     * @description Get the media ID of the story in the URL, e.g. /stories/{username}/{mediaId}/.
+     *
+     * @return {?String}
+     */
+    function getStoryIdFromPath() {
+        return location.pathname.split('/').filter(s => s.length > 0 && s.match(/^([0-9]{10,})$/)).at(-1);
+    }
+
+    /**
+     * getStoryPhoto
+     * @description Get the largest photo of a story, a video's cover included: its embed page's
+     *              (getEmbedPhoto, at upload size, without cookies), or where that is 1080 px or
+     *              less, the widest of it, the stories query's (getStories) and the Media API's
+     *              (getMediaInfo) image_versions2.
+     *
+     * @param  {String}  username
+     * @param  {String}  mediaId
+     * @return {Promise<?{url: String, width: Integer}>} null when none lists it
+     */
+    async function getStoryPhoto(username, mediaId) {
+        const embed = await getEmbedPhoto(mediaId).catch(() => null);
+        if (embed && embed.width > 1080) {
+            return embed;
+        }
+
+        const widest = photos => photos.reduce((a, b) => (b.width > a.width ? b : a));
+        const photos = embed ? [embed] : [];
+
+        try {
+            const findItem = stories => stories?.data.xdt_api__v1__feed__reels_media.reels_media[0].items.find(item => (item.pk ?? item.id) == mediaId);
+            let item = findItem(state.GL_dataCache.stories[username]);
+            if (!item) {
+                // The cache misses stories posted after it was filled.
+                const stories = await getStories((await getUserId(username)).user.pk);
+                item = findItem(stories);
+                state.GL_dataCache.stories[username] = stories;
+            }
+            photos.push(widest(item.image_versions2.candidates));
+            logger('getStoryPhoto()', 'stories query', photos.at(-1).width);
+        }
+        catch (err) {
+            logger('getStoryPhoto()', 'stories query reject', err);
+        }
+
+        const info = await getMediaInfo(mediaId).catch(() => null);
+        if (info?.status === 'ok') {
+            photos.push(widest(info.items[0].image_versions2.candidates));
+            logger('getStoryPhoto()', 'Media API', photos.at(-1).width);
+        }
+
+        return photos.length ? widest(photos) : null;
+    }
+
+    /**
      * onStoryThumbnail
      * @description Trigger user's story video thumbnail download event or button display event.
      *
@@ -3181,11 +3266,29 @@
 
             updateLoadingBar(true);
 
+            // A story with music has a 640 px cover in the Media API, where getStoryPhoto lists up to the upload.
+            const photo = await getStoryPhoto(username, getStoryIdFromPath());
+            if (photo) {
+                if (USER_SETTING.RENAME_PUBLISH_DATE) {
+                    timestamp = new Date($('body > div section:visible time[datetime][class]').first().attr('datetime')).getTime();
+                }
+
+                saveFiles(photo.url, {
+                    username,
+                    sourceType: "thumbnail",
+                    timestamp,
+                    filetype: type,
+                    shortcode: getStoryIdFromPath()
+                });
+                updateLoadingBar(false);
+                return;
+            }
+
             if (USER_SETTING.FORCE_RESOURCE_VIA_MEDIA && !state.tempFetchRateLimit) {
                 let userInfo = await getUserId(username);
                 let userId = userInfo.user.pk;
                 let stories = await getStories(userId);
-                let urlID = location.pathname.split('/').filter(s => s.length > 0 && s.match(/^([0-9]{10,})$/)).at(-1);
+                let urlID = getStoryIdFromPath();
                 // OPTIMIZATION: cache items reference
                 const items = stories.data.xdt_api__v1__feed__reels_media.reels_media[0].items;
 
@@ -3230,7 +3333,7 @@
                 }
 
                 if (mediaId == null) {
-                    mediaId = location.pathname.split('/').filter(s => s.length > 0 && s.match(/^([0-9]{10,})$/)).at(-1);
+                    mediaId = getStoryIdFromPath();
                 }
 
                 if (USER_SETTING.CAPTURE_IMAGE_VIA_MEDIA_CACHE) {
@@ -3668,6 +3771,62 @@
                 },
                 onerror: function (err) {
                     logger('getStories()', 'reject', err);
+                    reject(err);
+                }
+            });
+        });
+    }
+
+    /**
+     * getEmbedPhoto
+     * @description Get the photo of a post or story at upload size from its embed page, which lists it
+     *              uncapped to a link preview's crawler without cookies: a story with music at
+     *              1320x2346, where the story viewer and the Media API list a 640 px first frame.
+     *              Its width is measured: a video's listed dimensions are the video's, not its cover's.
+     *
+     * @param  {String}  mediaId
+     * @return {Promise<{url: String, width: Integer}>}
+     */
+    function getEmbedPhoto(mediaId) {
+        return new Promise((resolve, reject) => {
+            const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+            let id = BigInt(mediaId);
+            let shortcode = '';
+            while (id > 0n) {
+                shortcode = alphabet[Number(id % 64n)] + shortcode;
+                id /= 64n;
+            }
+
+            GM_xmlhttpRequest({
+                method: "GET",
+                url: `https://www.instagram.com/p/${shortcode}/embed/captioned/`,
+                // To a browser's User-Agent the page is an empty shell.
+                headers: {
+                    'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
+                },
+                anonymous: true,
+                onload: function (response) {
+                    try {
+                        const context = response.responseText.match(/"contextJSON":("(?:[^"\\]|\\.)*")/);
+                        const media = JSON.parse(JSON.parse(context[1])).gql_data.shortcode_media;
+                        const img = new Image();
+                        img.onload = () => {
+                            logger('getEmbedPhoto()', media.dimensions, img.naturalWidth);
+                            resolve({ url: media.display_url, width: img.naturalWidth });
+                        };
+                        img.onerror = err => {
+                            logger('getEmbedPhoto()', 'reject', 'display_url failed to load');
+                            reject(err);
+                        };
+                        img.src = media.display_url;
+                    }
+                    catch (err) {
+                        logger('getEmbedPhoto()', 'reject', response.status, err.message);
+                        reject(err);
+                    }
+                },
+                onerror: function (err) {
+                    logger('getEmbedPhoto()', 'reject', err);
                     reject(err);
                 }
             });

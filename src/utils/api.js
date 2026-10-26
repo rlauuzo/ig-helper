@@ -146,6 +146,62 @@ export function getStories(userId) {
     });
 }
 
+/**
+ * getEmbedPhoto
+ * @description Get the photo of a post or story at upload size from its embed page, which lists it
+ *              uncapped to a link preview's crawler without cookies: a story with music at
+ *              1320x2346, where the story viewer and the Media API list a 640 px first frame.
+ *              Its width is measured: a video's listed dimensions are the video's, not its cover's.
+ *
+ * @param  {String}  mediaId
+ * @return {Promise<{url: String, width: Integer}>}
+ */
+export function getEmbedPhoto(mediaId) {
+    return new Promise((resolve, reject) => {
+        const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+        let id = BigInt(mediaId);
+        let shortcode = '';
+        while (id > 0n) {
+            shortcode = alphabet[Number(id % 64n)] + shortcode;
+            id /= 64n;
+        }
+
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: `https://www.instagram.com/p/${shortcode}/embed/captioned/`,
+            // To a browser's User-Agent the page is an empty shell.
+            headers: {
+                'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
+            },
+            anonymous: true,
+            onload: function (response) {
+                try {
+                    const context = response.responseText.match(/"contextJSON":("(?:[^"\\]|\\.)*")/);
+                    const media = JSON.parse(JSON.parse(context[1])).gql_data.shortcode_media;
+                    const img = new Image();
+                    img.onload = () => {
+                        logger('getEmbedPhoto()', media.dimensions, img.naturalWidth);
+                        resolve({ url: media.display_url, width: img.naturalWidth });
+                    };
+                    img.onerror = err => {
+                        logger('getEmbedPhoto()', 'reject', 'display_url failed to load');
+                        reject(err);
+                    };
+                    img.src = media.display_url;
+                }
+                catch (err) {
+                    logger('getEmbedPhoto()', 'reject', response.status, err.message);
+                    reject(err);
+                }
+            },
+            onerror: function (err) {
+                logger('getEmbedPhoto()', 'reject', err);
+                reject(err);
+            }
+        });
+    });
+}
+
 export async function getUserIdViaProfileHtml(username) {
     const res = await fetch(`https://www.instagram.com/${encodeURIComponent(username)}/`, {
         credentials: 'include',

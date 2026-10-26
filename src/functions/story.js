@@ -8,7 +8,7 @@ import {
     setStoryProgressIndexText,
     setStoryProgressIndexByUsername
 } from "../utils/general";
-import { getUserId, getStories, getMediaInfo } from "../utils/api";
+import { getUserId, getStories, getMediaInfo, getEmbedPhoto } from "../utils/api";
 import { _i18n } from "../utils/i18n";
 import { getImageFromCache } from "../utils/image_cache";
 import { IG_createDM } from "../utils/dialog";
@@ -206,13 +206,43 @@ export async function onStory(isDownload, isForce, isPreview) {
         let timestamp = Math.floor(date / 1000);
 
         updateLoadingBar(true);
+
+        // A story with music shows and lists its 640 px first frame, where getStoryPhoto lists up to the upload.
+        const storyId = getStoryIdFromPath();
+        if (storyId && $('body > div section:visible video[playsinline]').length === 0) {
+            const $storyImg = $('body > div section:visible img[referrerpolicy][class], body > div section:visible img[crossorigin][class]:not([alt])');
+            const shownWidth = Math.max($storyImg[0]?.naturalWidth ?? 0, ...($storyImg.attr('srcset') ?? '').split(',').map(entry => parseInt(entry.trim().split(' ')[1]) || 0));
+            const photo = await getStoryPhoto(username, storyId);
+
+            if (photo && photo.width > shownWidth) {
+                if (USER_SETTING.RENAME_PUBLISH_DATE) {
+                    timestamp = new Date($('body > div section:visible time[datetime][class]').first().attr('datetime')).getTime();
+                }
+
+                if (isPreview) {
+                    openNewTab(photo.url);
+                }
+                else {
+                    saveFiles(photo.url, {
+                        username,
+                        sourceType: "stories",
+                        timestamp,
+                        filetype: 'jpg',
+                        shortcode: storyId
+                    });
+                }
+                updateLoadingBar(false);
+                return;
+            }
+        }
+
         if (USER_SETTING.FORCE_RESOURCE_VIA_MEDIA && !state.tempFetchRateLimit) {
             let mediaId = null;
 
             let userInfo = await getUserId(username);
             let userId = userInfo.user.pk;
             let stories = await getStories(userId);
-            let urlID = location.pathname.split('/').filter(s => s.length > 0 && s.match(/^([0-9]{10,})$/)).at(-1);
+            let urlID = getStoryIdFromPath();
 
             // OPTIMIZATION: cache items reference (used 4+ times)
             const items = stories.data.xdt_api__v1__feed__reels_media.reels_media[0].items;
@@ -258,7 +288,7 @@ export async function onStory(isDownload, isForce, isPreview) {
             }
 
             if (mediaId == null) {
-                mediaId = location.pathname.split('/').filter(s => s.length > 0 && s.match(/^([0-9]{10,})$/)).at(-1);
+                mediaId = getStoryIdFromPath();
             }
 
             if (USER_SETTING.CAPTURE_IMAGE_VIA_MEDIA_CACHE) {
@@ -657,6 +687,61 @@ export async function onStory(isDownload, isForce, isPreview) {
 }
 
 /**
+ * getStoryIdFromPath
+ * @description Get the media ID of the story in the URL, e.g. /stories/{username}/{mediaId}/.
+ *
+ * @return {?String}
+ */
+function getStoryIdFromPath() {
+    return location.pathname.split('/').filter(s => s.length > 0 && s.match(/^([0-9]{10,})$/)).at(-1);
+}
+
+/**
+ * getStoryPhoto
+ * @description Get the largest photo of a story, a video's cover included: its embed page's
+ *              (getEmbedPhoto, at upload size, without cookies), or where that is 1080 px or
+ *              less, the widest of it, the stories query's (getStories) and the Media API's
+ *              (getMediaInfo) image_versions2.
+ *
+ * @param  {String}  username
+ * @param  {String}  mediaId
+ * @return {Promise<?{url: String, width: Integer}>} null when none lists it
+ */
+async function getStoryPhoto(username, mediaId) {
+    const embed = await getEmbedPhoto(mediaId).catch(() => null);
+    if (embed && embed.width > 1080) {
+        return embed;
+    }
+
+    const widest = photos => photos.reduce((a, b) => (b.width > a.width ? b : a));
+    const photos = embed ? [embed] : [];
+
+    try {
+        const findItem = stories => stories?.data.xdt_api__v1__feed__reels_media.reels_media[0].items.find(item => (item.pk ?? item.id) == mediaId);
+        let item = findItem(state.GL_dataCache.stories[username]);
+        if (!item) {
+            // The cache misses stories posted after it was filled.
+            const stories = await getStories((await getUserId(username)).user.pk);
+            item = findItem(stories);
+            state.GL_dataCache.stories[username] = stories;
+        }
+        photos.push(widest(item.image_versions2.candidates));
+        logger('getStoryPhoto()', 'stories query', photos.at(-1).width);
+    }
+    catch (err) {
+        logger('getStoryPhoto()', 'stories query reject', err);
+    }
+
+    const info = await getMediaInfo(mediaId).catch(() => null);
+    if (info?.status === 'ok') {
+        photos.push(widest(info.items[0].image_versions2.candidates));
+        logger('getStoryPhoto()', 'Media API', photos.at(-1).width);
+    }
+
+    return photos.length ? widest(photos) : null;
+}
+
+/**
  * onStoryThumbnail
  * @description Trigger user's story video thumbnail download event or button display event.
  *
@@ -678,11 +763,29 @@ export async function onStoryThumbnail(isDownload, isForce) {
 
         updateLoadingBar(true);
 
+        // A story with music has a 640 px cover in the Media API, where getStoryPhoto lists up to the upload.
+        const photo = await getStoryPhoto(username, getStoryIdFromPath());
+        if (photo) {
+            if (USER_SETTING.RENAME_PUBLISH_DATE) {
+                timestamp = new Date($('body > div section:visible time[datetime][class]').first().attr('datetime')).getTime();
+            }
+
+            saveFiles(photo.url, {
+                username,
+                sourceType: "thumbnail",
+                timestamp,
+                filetype: type,
+                shortcode: getStoryIdFromPath()
+            });
+            updateLoadingBar(false);
+            return;
+        }
+
         if (USER_SETTING.FORCE_RESOURCE_VIA_MEDIA && !state.tempFetchRateLimit) {
             let userInfo = await getUserId(username);
             let userId = userInfo.user.pk;
             let stories = await getStories(userId);
-            let urlID = location.pathname.split('/').filter(s => s.length > 0 && s.match(/^([0-9]{10,})$/)).at(-1);
+            let urlID = getStoryIdFromPath();
             // OPTIMIZATION: cache items reference
             const items = stories.data.xdt_api__v1__feed__reels_media.reels_media[0].items;
 
@@ -727,7 +830,7 @@ export async function onStoryThumbnail(isDownload, isForce) {
             }
 
             if (mediaId == null) {
-                mediaId = location.pathname.split('/').filter(s => s.length > 0 && s.match(/^([0-9]{10,})$/)).at(-1);
+                mediaId = getStoryIdFromPath();
             }
 
             if (USER_SETTING.CAPTURE_IMAGE_VIA_MEDIA_CACHE) {
