@@ -17,7 +17,7 @@
 // @name:zh-CN         IG小助手
 // @name:zh-TW         IG小精靈
 // @namespace          https://github.snkms.com/
-// @version            5.4.3
+// @version            5.4.3.1
 // @description        Download photos and videos from Instagram posts in one click, including Stories, Reels, and profile pictures.
 // @description:ar     نزّل صورًا ومقاطع فيديو من منشورات Instagram بنقرة واحدة، بما في ذلك القصص وReels وصور الملف الشخصي.
 // @description:de     Lade Fotos und Videos aus Instagram-Beiträgen mit einem Klick herunter, einschließlich Stories, Reels und Profilbildern.
@@ -56,6 +56,8 @@
 // @resource           INTERNAL_CSS https://cdn.jsdelivr.net/gh/SN-Koarashi/ig-helper@master/style.css
 // @resource           LOCALE_MANIFEST https://cdn.jsdelivr.net/gh/SN-Koarashi/ig-helper@master/locale/manifest.json
 // @supportURL         https://github.com/SN-Koarashi/ig-helper/
+// @updateURL          https://raw.githubusercontent.com/rlauuzo/ig-helper/release/main.js
+// @downloadURL        https://raw.githubusercontent.com/rlauuzo/ig-helper/release/main.js
 // @contributionURL    https://ko-fi.com/snkoarashi
 // @icon               https://www.google.com/s2/favicons?domain=www.instagram.com&sz=32
 // @compatible         chrome >= 100
@@ -5270,6 +5272,25 @@
 
                 const currentStoryHasVideo = $('body > div section:visible video[playsinline]').length > 0;
 
+                // A story with music shows and lists its 640 px first frame, where getStoryPhoto finds up to the upload.
+                const storyPhoto = currentStoryHasVideo ? null : await getStoryPhoto(urlID ?? domJsonMediaId);
+                if (storyPhoto) {
+                    if (isPreview) {
+                        openNewTab(storyPhoto.url);
+                    }
+                    else {
+                        saveFiles(storyPhoto.url, {
+                            username,
+                            sourceType: "stories",
+                            timestamp: USER_SETTING.RENAME_PUBLISH_DATE ? visibleStoryTimestamp ?? timestamp : timestamp,
+                            filetype: 'jpg',
+                            shortcode: urlID ?? domJsonMediaId
+                        });
+                    }
+
+                    return;
+                }
+
                 if (USER_SETTING.CAPTURE_IMAGE_VIA_MEDIA_CACHE) {
                     for (const candidateId of candidateIds) {
                         const cached = getImageFromCache(candidateId);
@@ -5605,6 +5626,24 @@
         }
     }
 
+    /**
+     * getStoryPhoto
+     * @description Get a story's photo, a video's cover included, from its embed page (getEmbedPhoto,
+     *              at upload size) or its /media/ redirect (getCoverPhoto), when one is 1080 px or
+     *              wider: the stories query lists 1080 px at most, and only 640 px of a story with music.
+     *
+     * @param  {?String}  mediaId
+     * @return {Promise<?{url: String, width: Integer}>} null where neither reaches 1080 px
+     */
+    async function getStoryPhoto(mediaId) {
+        if (!mediaId) return null;
+
+        const embed = await getEmbedPhoto(mediaId).catch(() => null);
+        if (embed?.width >= 1080) return embed;
+
+        const cover = await getCoverPhoto(mediaId).catch(() => null);
+        return cover?.width >= 1080 ? cover : null;
+    }
 
     /**
      * onStoryThumbnail
@@ -5711,6 +5750,20 @@
 
                 domMediaIds = getVisibleVideoPosterMediaIds().filter(id => id !== domJsonMediaId);
                 candidateIds.push(...domMediaIds);
+            }
+
+            // A story with music has a 640 px cover in the stories query, where getStoryPhoto finds up to the upload.
+            const storyPhoto = await getStoryPhoto(urlID ?? domJsonMediaId);
+            if (storyPhoto) {
+                saveFiles(storyPhoto.url, {
+                    username,
+                    sourceType: "thumbnail",
+                    timestamp: USER_SETTING.RENAME_PUBLISH_DATE ? visibleStoryTimestamp ?? timestamp : timestamp,
+                    filetype: type,
+                    shortcode: urlID ?? domJsonMediaId
+                });
+                updateLoadingBar(false);
+                return;
             }
 
             if (USER_SETTING.CAPTURE_IMAGE_VIA_MEDIA_CACHE) {
@@ -6432,6 +6485,9 @@
         }
     }
 
+    // To Firefox's User-Agent the Media API's DASH manifest listed no VP9, to Chrome's VP9 up to 1080p; the stories queries' manifests are asked the same way.
+    const dashAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+
     /**
      * getHighlightStories
      * @description Get a list of all stories in highlight Id. A highlightId isn't a
@@ -6466,7 +6522,7 @@
                 method: "POST",
                 url: api.url,
                 data: api.body,
-                headers: api.headers,
+                headers: { ...api.headers, "User-Agent": dashAgent },
                 onload: async function (response) {
                     try {
                         let obj = JSON.parse(response.response);
@@ -6530,7 +6586,7 @@
                 method: "POST",
                 url: api.url,
                 data: api.body,
-                headers: api.headers,
+                headers: { ...api.headers, "User-Agent": dashAgent },
                 onload: function (response) {
                     try {
                         let obj = JSON.parse(response.response);
@@ -6583,6 +6639,104 @@
                 },
                 onerror: function (err) {
                     logger('getStories()', 'reject', err);
+                    reject(err);
+                }
+            });
+        });
+    }
+
+    /**
+     * shortcodeFromMediaId
+     * @description The shortcode a post's or story's /p/ links name it by, from its media id.
+     *
+     * @param  {String}  mediaId
+     * @return {String}
+     */
+    function shortcodeFromMediaId(mediaId) {
+        const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+        let id = BigInt(mediaId);
+        let shortcode = '';
+        while (id > 0n) {
+            shortcode = alphabet[Number(id % 64n)] + shortcode;
+            id /= 64n;
+        }
+        return shortcode;
+    }
+
+    /**
+     * measurePhoto
+     * @description The photo at `url` with its width, loaded to measure it: the sizes Instagram lists
+     *              of a video are the video's, not its cover's.
+     *
+     * @param  {String}  url
+     * @return {Promise<{url: String, width: Integer}>}
+     */
+    function measurePhoto(url) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve({ url, width: img.naturalWidth });
+            img.onerror = reject;
+            img.src = url;
+        });
+    }
+
+    /**
+     * getCoverPhoto
+     * @description Get the cover of a post or story from its /media/?size=l redirect, which signs it
+     *              at 1080 px at most: a story with music's cover where its embed page lists only the
+     *              640 px first frame.
+     *
+     * @param  {String}  mediaId
+     * @return {Promise<{url: String, width: Integer}>}
+     */
+    async function getCoverPhoto(mediaId) {
+        // A HEAD is refused (405), and the CDN refuses the redirect's request with cookies (CORS).
+        const res = await fetch(`https://www.instagram.com/p/${shortcodeFromMediaId(mediaId)}/media/?size=l`);
+        if (!res.ok) throw new Error('media redirect HTTP ' + res.status);
+        const photo = await measurePhoto(res.url);
+        logger('getCoverPhoto()', photo.width);
+        return photo;
+    }
+
+    /**
+     * getEmbedPhoto
+     * @description Get the photo of a post or story at upload size from its embed page, which lists it
+     *              uncapped to a link preview's crawler without cookies: a story with music at
+     *              1320x2346, where the story viewer lists a 640 px first frame. Some stories with
+     *              music list only that frame there.
+     *
+     * @param  {String}  mediaId
+     * @return {Promise<{url: String, width: Integer}>}
+     */
+    function getEmbedPhoto(mediaId) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: "GET",
+                url: `https://www.instagram.com/p/${shortcodeFromMediaId(mediaId)}/embed/captioned/`,
+                // To a browser's User-Agent the page is an empty shell.
+                headers: {
+                    'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
+                },
+                anonymous: true,
+                onload: function (response) {
+                    try {
+                        const context = response.responseText.match(/"contextJSON":("(?:[^"\\]|\\.)*")/);
+                        const media = JSON.parse(JSON.parse(context[1])).gql_data.shortcode_media;
+                        measurePhoto(media.display_url).then(photo => {
+                            logger('getEmbedPhoto()', photo.width);
+                            resolve(photo);
+                        }, err => {
+                            logger('getEmbedPhoto()', 'reject', 'display_url failed to load');
+                            reject(err);
+                        });
+                    }
+                    catch (err) {
+                        logger('getEmbedPhoto()', 'reject', response.status, err.message);
+                        reject(err);
+                    }
+                },
+                onerror: function (err) {
+                    logger('getEmbedPhoto()', 'reject', err);
                     reject(err);
                 }
             });
