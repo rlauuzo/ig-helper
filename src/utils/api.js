@@ -478,7 +478,8 @@ export function getMediaInfo(mediaId) {
             method: "GET",
             url: getURL,
             headers: {
-                "User-Agent": webViewAgent,
+                // To Firefox's User-Agent and webViewAgent the DASH manifest lists no VP9, to Chrome's VP9 up to 1080p.
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
                 'X-IG-App-ID': getAppID() || '0',
                 'X-CSRFToken': getCookie('csrftoken') || '',
                 'X-Asbd-ID': '359341',
