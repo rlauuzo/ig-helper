@@ -19,10 +19,6 @@ jobs:
           ref: release
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
       - name: Rebase, rebuild and push
         run: |
           git config user.name "github-actions[bot]"
@@ -38,7 +34,7 @@ jobs:
           git config merge.keep.driver true
           git rebase FETCH_HEAD
 
-          npm ci
+          # build.js needs only Node's built-ins, and the repo has no lockfile for npm ci.
           node build.js
           # Upstream's version + ".1" sorts above upstream's build and below its next release.
           version=$(sed -n 's|^// @version *||p' src/metadata.js)
