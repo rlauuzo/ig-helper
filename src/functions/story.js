@@ -11,7 +11,7 @@ import {
     resolveMediaIdOfStoryOrHighlightByTimestamp, getStoryButtonContainer,
     markContainerPositioned, updateStoryThumbnailButton, getVisibleVideoPosterMediaIds
 } from "../utils/general";
-import { getUserId, getStories, isReelsMediaVideo } from "../utils/api";
+import { getUserId, getStories, isReelsMediaVideo, getEmbedPhoto, getCoverPhoto } from "../utils/api";
 import { _i18n } from "../utils/i18n";
 import { getImageFromCache } from "../utils/image_cache";
 import { IG_createDM } from "../utils/dialog";
@@ -288,6 +288,25 @@ export async function onStory(isDownload, isForce, isPreview) {
             }
 
             const currentStoryHasVideo = $('body > div section:visible video[playsinline]').length > 0;
+
+            // A story with music shows and lists its 640 px first frame, where getStoryPhoto finds up to the upload.
+            const storyPhoto = currentStoryHasVideo ? null : await getStoryPhoto(urlID ?? domJsonMediaId);
+            if (storyPhoto) {
+                if (isPreview) {
+                    openNewTab(storyPhoto.url);
+                }
+                else {
+                    saveFiles(storyPhoto.url, {
+                        username,
+                        sourceType: "stories",
+                        timestamp: USER_SETTING.RENAME_PUBLISH_DATE ? visibleStoryTimestamp ?? timestamp : timestamp,
+                        filetype: 'jpg',
+                        shortcode: urlID ?? domJsonMediaId
+                    });
+                }
+
+                return;
+            }
 
             if (USER_SETTING.CAPTURE_IMAGE_VIA_MEDIA_CACHE) {
                 for (const candidateId of candidateIds) {
@@ -624,6 +643,24 @@ export async function onStory(isDownload, isForce, isPreview) {
     }
 }
 
+/**
+ * getStoryPhoto
+ * @description Get a story's photo, a video's cover included, from its embed page (getEmbedPhoto,
+ *              at upload size) or its /media/ redirect (getCoverPhoto), when one is 1080 px or
+ *              wider: the stories query lists 1080 px at most, and only 640 px of a story with music.
+ *
+ * @param  {?String}  mediaId
+ * @return {Promise<?{url: String, width: Integer}>} null where neither reaches 1080 px
+ */
+async function getStoryPhoto(mediaId) {
+    if (!mediaId) return null;
+
+    const embed = await getEmbedPhoto(mediaId).catch(() => null);
+    if (embed?.width >= 1080) return embed;
+
+    const cover = await getCoverPhoto(mediaId).catch(() => null);
+    return cover?.width >= 1080 ? cover : null;
+}
 
 /**
  * onStoryThumbnail
@@ -730,6 +767,20 @@ export async function onStoryThumbnail(isDownload, isForce) {
 
             domMediaIds = getVisibleVideoPosterMediaIds().filter(id => id !== domJsonMediaId);
             candidateIds.push(...domMediaIds);
+        }
+
+        // A story with music has a 640 px cover in the stories query, where getStoryPhoto finds up to the upload.
+        const storyPhoto = await getStoryPhoto(urlID ?? domJsonMediaId);
+        if (storyPhoto) {
+            saveFiles(storyPhoto.url, {
+                username,
+                sourceType: "thumbnail",
+                timestamp: USER_SETTING.RENAME_PUBLISH_DATE ? visibleStoryTimestamp ?? timestamp : timestamp,
+                filetype: type,
+                shortcode: urlID ?? domJsonMediaId
+            });
+            updateLoadingBar(false);
+            return;
         }
 
         if (USER_SETTING.CAPTURE_IMAGE_VIA_MEDIA_CACHE) {

@@ -170,6 +170,104 @@ export function getStories(userId, expectedUsername, _retried) {
 }
 
 /**
+ * shortcodeFromMediaId
+ * @description The shortcode a post's or story's /p/ links name it by, from its media id.
+ *
+ * @param  {String}  mediaId
+ * @return {String}
+ */
+function shortcodeFromMediaId(mediaId) {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    let id = BigInt(mediaId);
+    let shortcode = '';
+    while (id > 0n) {
+        shortcode = alphabet[Number(id % 64n)] + shortcode;
+        id /= 64n;
+    }
+    return shortcode;
+}
+
+/**
+ * measurePhoto
+ * @description The photo at `url` with its width, loaded to measure it: the sizes Instagram lists
+ *              of a video are the video's, not its cover's.
+ *
+ * @param  {String}  url
+ * @return {Promise<{url: String, width: Integer}>}
+ */
+function measurePhoto(url) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve({ url, width: img.naturalWidth });
+        img.onerror = reject;
+        img.src = url;
+    });
+}
+
+/**
+ * getCoverPhoto
+ * @description Get the cover of a post or story from its /media/?size=l redirect, which signs it
+ *              at 1080 px at most: a story with music's cover where its embed page lists only the
+ *              640 px first frame.
+ *
+ * @param  {String}  mediaId
+ * @return {Promise<{url: String, width: Integer}>}
+ */
+export async function getCoverPhoto(mediaId) {
+    // A HEAD is refused (405), and the CDN refuses the redirect's request with cookies (CORS).
+    const res = await fetch(`https://www.instagram.com/p/${shortcodeFromMediaId(mediaId)}/media/?size=l`);
+    if (!res.ok) throw new Error('media redirect HTTP ' + res.status);
+    const photo = await measurePhoto(res.url);
+    logger('getCoverPhoto()', photo.width);
+    return photo;
+}
+
+/**
+ * getEmbedPhoto
+ * @description Get the photo of a post or story at upload size from its embed page, which lists it
+ *              uncapped to a link preview's crawler without cookies: a story with music at
+ *              1320x2346, where the story viewer lists a 640 px first frame. Some stories with
+ *              music list only that frame there.
+ *
+ * @param  {String}  mediaId
+ * @return {Promise<{url: String, width: Integer}>}
+ */
+export function getEmbedPhoto(mediaId) {
+    return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: `https://www.instagram.com/p/${shortcodeFromMediaId(mediaId)}/embed/captioned/`,
+            // To a browser's User-Agent the page is an empty shell.
+            headers: {
+                'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
+            },
+            anonymous: true,
+            onload: function (response) {
+                try {
+                    const context = response.responseText.match(/"contextJSON":("(?:[^"\\]|\\.)*")/);
+                    const media = JSON.parse(JSON.parse(context[1])).gql_data.shortcode_media;
+                    measurePhoto(media.display_url).then(photo => {
+                        logger('getEmbedPhoto()', photo.width);
+                        resolve(photo);
+                    }, err => {
+                        logger('getEmbedPhoto()', 'reject', 'display_url failed to load');
+                        reject(err);
+                    });
+                }
+                catch (err) {
+                    logger('getEmbedPhoto()', 'reject', response.status, err.message);
+                    reject(err);
+                }
+            },
+            onerror: function (err) {
+                logger('getEmbedPhoto()', 'reject', err);
+                reject(err);
+            }
+        });
+    });
+}
+
+/**
  * getUserIdViaProfileHtml
  * @description Try to resolve a username from Instagram's profile HTML.
  * @param {String} username
