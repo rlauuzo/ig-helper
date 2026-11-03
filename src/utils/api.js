@@ -12,6 +12,9 @@ import { filterResourceData } from "../functions/post";
 import { initPersistentCache } from "./persistent_cache";
 /*! ESLINT IMPORT END !*/
 
+// To Firefox's User-Agent the Media API's DASH manifest listed no VP9, to Chrome's VP9 up to 1080p; the stories queries' manifests are asked the same way.
+const dashAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+
 /**
  * getHighlightStories
  * @description Get a list of all stories in highlight Id. A highlightId isn't a
@@ -46,7 +49,7 @@ export function getHighlightStories(highlightId) {
             method: "POST",
             url: api.url,
             data: api.body,
-            headers: api.headers,
+            headers: { ...api.headers, "User-Agent": dashAgent },
             onload: async function (response) {
                 try {
                     let obj = JSON.parse(response.response);
@@ -110,7 +113,7 @@ export function getStories(userId, expectedUsername, _retried) {
             method: "POST",
             url: api.url,
             data: api.body,
-            headers: api.headers,
+            headers: { ...api.headers, "User-Agent": dashAgent },
             onload: function (response) {
                 try {
                     let obj = JSON.parse(response.response);
